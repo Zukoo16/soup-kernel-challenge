@@ -68,14 +68,21 @@ def swiglu(gate, up):
 def patch_qwen2_mlp():
     """Send Qwen2MLP.forward through the fused kernel. A class patch works before or after Soup
     builds the model: Python looks the method up on every call."""
-    from transformers.models.qwen2 import modeling_qwen2
+    try:
+        from transformers.models.qwen2 import modeling_qwen2
+    except Exception:
+        return
 
-    original = modeling_qwen2.Qwen2MLP.forward
+    mlp_cls = getattr(modeling_qwen2, "Qwen2MLP", None)
+    original = getattr(mlp_cls, "forward", None)
+    if original is None or getattr(original, "_soup_fused_swiglu", False):
+        return
 
     def forward(self, x):
         act = getattr(getattr(self, "config", None), "hidden_act", "silu")
-        if act != "silu" or not x.is_cuda:
+        if act != "silu" or not isinstance(x, torch.Tensor) or not x.is_cuda:
             return original(self, x)
         return self.down_proj(swiglu(self.gate_proj(x), self.up_proj(x)))
 
+    forward._soup_fused_swiglu = True
     modeling_qwen2.Qwen2MLP.forward = forward

@@ -13,8 +13,102 @@ The rules in short (the README and the task statement have the full ones):
   settings and outputs; no other GPU, no background processes, no tricks with the measurement.
 """
 
-from .swiglu import patch_qwen2_mlp
+import time
+
+from .ce_fused import patch_row_losses, patch_trl_compute_loss
+from .lora_fused import patch_lora_linear
+from .nf4_gemm import patch_nf4_linear
+from .rmsnorm_fused import patch_qwen2_rmsnorm
+from .swiglu import patch_qwen2_mlp, swiglu
+
+
+def _precompile():
+    """Compile every kernel before the first timed step, in parallel threads.
+
+    Every measured run starts with an empty Triton cache and the wall time of the whole
+    `soup train` command is scored, so the (unavoidable) compilation cost is paid here,
+    during apply() while the GPU is idle, instead of inside the loop. Different kernels
+    compile independently (separate ptxas subprocesses), so threads overlap well.
+    """
+    import torch
+
+    if not torch.cuda.is_available():
+        return
+    from concurrent.futures import ThreadPoolExecutor
+
+    from . import ce_fused, lora_fused, nf4_gemm, rmsnorm_fused
+
+    v = 151936
+    results = {}
+
+    def compile_ce():
+        logits = torch.randn(2, v, device="cuda", dtype=torch.float16) * 2
+        targets = torch.tensor([17, -100], device="cuda", dtype=torch.int32)
+        ce, ent, amax = ce_fused.FusedCE.apply(logits, targets)
+        g = torch.where(targets >= 0, torch.full_like(ce, 0.5), torch.zeros_like(ce))
+        torch.autograd.backward(ce, g)
+        del logits, targets, ce, ent, amax, g
+
+    def compile_rmsnorm():
+        # the task run feeds fp32 residuals to the norms; precompile both variants
+        rmsnorm_fused.precompile()
+
+    def compile_swiglu():
+        # the base bnb projections cast their output back to the fp32 input dtype,
+        # so gate/up arrive as fp32 in the task run
+        gate = torch.randn(2, 2048, device="cuda", dtype=torch.float32)
+        up = torch.randn(2, 2048, device="cuda", dtype=torch.float32)
+        out = swiglu(gate, up)
+        torch.autograd.backward(out, torch.randn_like(out))
+        del gate, up, out
+
+    def compile_nf4():
+        nf4_gemm.precompile()
+
+    def compile_lora():
+        lora_fused.precompile()
+
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        futures = {
+            pool.submit(compile_ce): "ce",
+            pool.submit(compile_rmsnorm): "rmsnorm",
+            pool.submit(compile_swiglu): "swiglu",
+            pool.submit(compile_nf4): "nf4",
+            pool.submit(compile_lora): "lora",
+        }
+        for future, name in futures.items():
+            try:
+                future.result(timeout=600)
+            except Exception as exc:  # noqa: BLE001 - precompilation must never break the run
+                results[name] = repr(exc)
+    if results:
+        print(f"[solution] precompile notes: {results}", flush=True)
 
 
 def apply():
-    patch_qwen2_mlp()  # the example: works out of the box, does not count as your own kernel
+    """Install every patch, then precompile the kernels.
+
+    Each patch is independent: a failure (a missing or reshaped module, ...) is
+    reported and skipped instead of breaking the whole run -- and it keeps Soup's
+    own regression suite (check 10, which calls apply() with fake transformers/peft
+    modules in sys.modules) green, because the patched call sites all fall back to
+    the original implementations through their isinstance/type guards.
+    """
+    t0 = time.perf_counter()
+    patches = (
+        ("example swiglu", patch_qwen2_mlp),      # does not count as our kernel
+        ("fused rmsnorm", patch_qwen2_rmsnorm),
+        ("fused ce (trl)", patch_trl_compute_loss),
+        ("fused ce (row_losses)", patch_row_losses),
+        ("nf4 gemm", patch_nf4_linear),
+        ("fused lora", patch_lora_linear),
+    )
+    failed = []
+    for name, fn in patches:
+        try:
+            fn()
+        except Exception as exc:  # noqa: BLE001 - one broken patch must never kill the run
+            failed.append(f"{name}: {exc!r}")
+    _precompile()
+    note = f" (failed: {'; '.join(failed)})" if failed else ""
+    print(f"[solution] applied + precompiled in {time.perf_counter() - t0:.1f} s{note}", flush=True)
