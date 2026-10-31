@@ -100,7 +100,8 @@ def apply():
         ("fused rmsnorm", patch_qwen2_rmsnorm),
         ("fused ce (trl)", patch_trl_compute_loss),
         ("fused ce (row_losses)", patch_row_losses),
-        ("nf4 gemm", patch_nf4_linear),
+        # ("nf4 gemm", patch_nf4_linear),  # disabled: on T4 ~70x slower than bnb CUDA, fp16 forward diverges (bisect)
+
         ("fused lora", patch_lora_linear),
     )
     failed = []
