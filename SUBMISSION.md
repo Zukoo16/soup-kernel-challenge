@@ -1,7 +1,7 @@
 # Submission: Zukoo16
 
 ## Links
-- Repository, final commit: https://github.com/Zukoo16/soup-kernel-challenge/commit/25592fe29ff06b93745e03752c7f511e378df570
+- Repository, final commit: https://github.com/Zukoo16/soup-kernel-challenge/commit/ee17cd8
 - Public Kaggle notebook, the saved version (`COMMIT` in it = the sha above; the same link must
   be in your README):
   https://www.kaggle.com/code/rakhymbai/soup-kernel-challenge-t4-x2-run?scriptVersionId=<version>
