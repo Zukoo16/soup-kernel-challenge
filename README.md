@@ -6,7 +6,7 @@ batch 4 × 512, 64 steps) on a free Kaggle T4, using only our own Triton kernels
 steps, LoRA, optimizer — and Soup's outputs (loss curve, entropy, accuracy, rewind row losses,
 the saved adapter) stay within the harness tolerances.
 
-**Public Kaggle notebook (saved with `COMMIT` = the final commit): `https://www.kaggle.com/code/<you>/<notebook>?scriptVersionId=<version>`**
+**Public Kaggle notebook (saved with `COMMIT` = the final commit): `https://www.kaggle.com/code/rakhymbai/soup-kernel-challenge-t4-x2-run`**
 
 ## What we did
 
@@ -72,15 +72,32 @@ Faster iteration: `python harness/run_task.py --only solution --out runs_try --p
 ## Results
 
 Numbers below come from the public Kaggle notebook (base and solution in the same session,
-`harness/run_task.py`).
+`harness/run_task.py`), saved version of the run on commit `ee17cd8`.
 
 | | Base Soup 0.77.0 | Ours | Ratio |
 |---|---|---|---|
-| `soup train`, wall s | _from the notebook_ | _from the notebook_ | _speedup ×_ |
-| Peak GPU memory, MiB | _from the notebook_ | _from the notebook_ | _base/ours ×_ |
-| Eval loss, public rows | _from the notebook_ | _from the notebook_ | _% vs base_ |
+| `soup train`, wall s | 77.2 | run failed at step 2 (see below) | — |
+| Peak GPU memory, MiB | 14 345 | 14 885 (partial run) | 0.96× |
+| Eval loss, public rows | 2.0497 | not reached (run failed) | — |
 
-All 10 checks: _from `runs/checks.json` of the notebook_.
+Checks passed: **2** (no ready-made kernel libraries), **9** (clean measurement), **10**
+(all 79 Soup regression tests with our patches installed).
+
+**Status of the final run (honest note).** The solution run crashed at step 2 with a GPU
+OOM, and the step-1 `grad_norm` was NaN. Post-run analysis of the harness profile
+(`runs/solution_1/metrics.json` of the notebook) shows the cause: our Triton NF4 GEMM runs
+~50 s over the two measured steps, i.e. far slower than bnb's tuned CUDA `gemm_4bit` on the
+T4 (≈0.7 s for the same work), and its double-quant dequantization is numerically off on
+the fp16 path (NaN gradients). The other kernels (fused CE, fused RMSNorm, fused LoRA)
+launched and are validated by the probes; with the NF4 GEMM patch disabled in
+`solution/__init__.py` the expected win comes from the fused CE chain (the whole loss
+chain over the 151 936-token vocabulary: −fp32 copy, −fp32 CE, −entropy, −rewind passes)
+plus the ~2–3 GB peak-memory reduction. That is the immediate next step and is why this
+submission is partial: the kernel pair for NF4 GEMM needs a T4 retune (block sizes,
+num_warps/num_stages) and a numerics fix before it can be re-enabled.
+
+All 10 checks: see `runs/checks.json` of the notebook (2, 9, 10 green; the rest are red
+only because the solution run did not finish).
 
 ## Limits
 

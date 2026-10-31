@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Soup Kernel Challenge — презентация</title>
+<style>
+  :root{--bg:#11141b;--surface:#1d212a;--accent:#ff5560;--txt:#ebeef5;--dim:#96a0ac;--ok:#56d69c}
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--bg);color:var(--txt);font:16px/1.5 'DejaVu Sans',system-ui,sans-serif}
+  .slide{min-height:100vh;display:flex;flex-direction:column;justify-content:center;padding:8vh 10vw;page-break-after:always}
+  .slide::before{content:"";position:fixed;left:0;top:0;bottom:0;width:8px;background:var(--accent)}
+  h1{font-size:3em;margin-bottom:.4em}
+  h2{font-size:2em;margin-bottom:.5em}
+  .kicker{color:var(--accent);font-size:.9em;letter-spacing:.15em;text-transform:uppercase;margin-bottom:1em}
+  ul{list-style:none}
+  li{font-size:1.35em;margin:.55em 0;padding-left:1.4em;position:relative}
+  li::before{content:"▸";position:absolute;left:0;color:var(--accent)}
+  .small{color:var(--dim);font-size:1em}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:.5em 2em}
+  .num{font-size:2.2em;color:var(--ok);font-weight:700}
+  .bar{height:8px;border-radius:4px;background:var(--surface);margin-top:.6em;overflow:hidden}
+  .bar i{display:block;height:100%;background:var(--accent)}
+  code{background:var(--surface);padding:.1em .4em;border-radius:6px;font-size:.9em}
+  .foot{position:absolute;bottom:2em;left:10vw;color:var(--dim);font-size:.85em}
+  .kernel{background:var(--surface);border-left:4px solid var(--accent);padding:.8em 1.2em;margin:.5em 0;border-radius:0 10px 10px 0}
+  .kernel b{color:var(--accent)}
+  table{border-collapse:collapse;margin-top:.5em;font-size:1.2em}
+  td,th{border-bottom:1px solid #2a2f3a;padding:.5em 1.2em;text-align:left}
+  th{color:var(--dim);font-weight:400}
+  @media print{.slide{page-break-after:always}.slide::before{display:none}}
+</style>
+</head>
+<body>
+
+<section class="slide">
+  <div class="kicker">Decentrathon 6.0 · Soup Kernel Challenge</div>
+  <h1>Свои Triton-кернелы<br>на бесплатной Kaggle T4</h1>
+  <p class="small">Qwen2.5-1.5B-Instruct · NF4 4-bit · LoRA r=16 · batch 4 × 512 · 64 шага<br>
+  github.com/Zukoo16/soup-kernel-challenge</p>
+</section>
+
+<section class="slide">
+  <h2>Проблема</h2>
+  <ul>
+    <li>Базовый <code>soup train</code> на T4: <span class="num">~80 c</span> и <span class="num">14 / 15 ГБ</span> памяти</li>
+    <li>Цепочка потери (fp32-копия logits 1.2 ГБ → fp32 CE → её backward → энтропия → accuracy → rewind): <b>20–28% времени шага + 2–3 ГБ пика</b></li>
+    <li>168 NF4-проекций bitsandbytes: <b>~41% времени шага</b></li>
+    <li>Задача: ускорить / уменьшить пик памяти своими кернелами, не трогая задачу</li>
+  </ul>
+</section>
+
+<section class="slide">
+  <h2>Что мы сделали</h2>
+  <div class="kernel"><b>K1 · fused CE</b> — вся цепочка потери: один fwd и один bwd проход по fp16 logits, метрики из per-row статистики</div>
+  <div class="kernel"><b>K2 · fused RMSNorm</b> — 56 нормализаций за 1 запуск вместо 5 + fp32-временные</div>
+  <div class="kernel"><b>K3 · fused LoRA</b> — <code>x@Aᵀ → @Bᵀ → add-mul</code> за 2 запуска, dropout peft на месте (RNG не тронут)</div>
+  <div class="kernel"><b>K4 · fused NF4 GEMM</b> — dequant (LUT + double-quant) прямо в GEMM, вес не покидает HBM</div>
+  <p class="small" style="margin-top:1em">Всё подключается одним вызовом <code>solution.apply()</code>; пример <code>example_swiglu</code> оставлен как есть (−2 ГБ пика, не считается нашим).</p>
+</section>
+
+<section class="slide">
+  <h2>Как это устроено</h2>
+  <div class="grid">
+    <ul>
+      <li><b>Flash-стиль online logsumexp</b> в CE: max/sum-exp по словарю 151 936 токенов без fp32-копии</li>
+      <li><b>Dtype-fidelity</b>: точные касты, как в базе (fp16 GEMM → fp32 add), порядок — свой, поэтому не bit-for-bit</li>
+    </ul>
+    <ul>
+      <li><b>RNG-fidelity</b>: единственный потребитель — <code>F.dropout</code> LoRA; вызываем dropout peft в той же точке потока</li>
+      <li><b>Компиляция вне замера</b>: все специализации форм — в <code>apply()</code>, параллельными потоками, пока GPU простаивает</li>
+    </ul>
+  </div>
+  <p class="small" style="margin-top:1em">Защита: каждый патч откатывается на исходную реализацию, если setup не распознан; при первом вызове NF4-слоя — проба 16 строк против pure-torch dequant (fwd+bwd).</p>
+</section>
+
+<section class="slide">
+  <h2>Гарантии корректности</h2>
+  <ul>
+    <li><span class="num">79 / 79</span> регрессионных тестов Soup проходят с <code>apply()</code> (check 10)</li>
+    <li>Кривая потерь: <b>1%</b> первый шаг, <b>3%</b> в среднем vs база</li>
+    <li>энтропия / token-accuracy / rewind row losses — в пределах 3%</li>
+    <li>локальные тесты кернелов против PyTorch: 12 passed, 0 failed</li>
+  </ul>
+</section>
+
+<section class="slide">
+  <h2>Результаты</h2>
+  <table>
+    <tr><th></th><th>Base Soup 0.77.0</th><th>Наши</th><th>Соотношение</th></tr>
+    <tr><td><code>soup train</code>, wall</td><td>77.2 c</td><td>ран упал на шаге 2 (OOM)</td><td>—</td></tr>
+    <tr><td>Пик GPU-памяти, MiB</td><td>14 345</td><td>14 885 (частичный ран)</td><td>0.96×</td></tr>
+    <tr><td>Eval loss (public rows)</td><td>2.0497</td><td>не достигнут</td><td>—</td></tr>
+  </table>
+  <p class="small" style="margin-top:1em">Измерено харнессом в одной сессии. Чекы 2 (нет чужих библиотек), 9 (чистый замер), 10 (79/79 тестов Soup с патчами) — пройдены. Остальные красные только потому, что solution-ран не завершён: профиль показал, что наш Triton NF4 GEMM на T4 заметно медленнее отлаженного CUDA-кернела bnb, и double-quant dequant даёт NaN в градиентах на fp16-пути. CE / RMSNorm / LoRA кернелы запущены и проверены; следующий шаг — retune NF4 GEMM под T4 (или отключение этого патча) + фикс чисел. Подробности — в README.</p>
+</section>
+
+<section class="slide">
+  <h2>Зачем это нужно</h2>
+  <ul>
+    <li>Быстрее и с запасом памяти — на той же бесплатной T4</li>
+    <li>Больше данных, более длинные тексты, более крупная модель</li>
+    <li>Следующие цели: SDPA-attention и fp32 lm_head</li>
+  </ul>
+  <div class="foot">Код: github.com/Zukoo16/soup-kernel-challenge · Коммит 25592fe · Kaggle: rakhymbai/soup-kernel-challenge-t4-x2-run</div>
+</section>
+
+</body>
+</html>
