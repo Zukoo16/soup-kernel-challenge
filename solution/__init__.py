@@ -42,7 +42,7 @@ def _precompile():
     results = {}
 
     def compile_ce():
-        logits = torch.randn(2, v, device="cuda", dtype=torch.float16) * 2
+        logits = (torch.randn(2, v, device="cuda", dtype=torch.float16) * 2).requires_grad_(True)
         targets = torch.tensor([17, -100], device="cuda", dtype=torch.int32)
         ce, ent, amax = ce_fused.FusedCE.apply(logits, targets)
         g = torch.where(targets >= 0, torch.full_like(ce, 0.5), torch.zeros_like(ce))
@@ -56,8 +56,8 @@ def _precompile():
     def compile_swiglu():
         # the base bnb projections cast their output back to the fp32 input dtype,
         # so gate/up arrive as fp32 in the task run
-        gate = torch.randn(2, 2048, device="cuda", dtype=torch.float32)
-        up = torch.randn(2, 2048, device="cuda", dtype=torch.float32)
+        gate = torch.randn(2, 2048, device="cuda", dtype=torch.float32).requires_grad_(True)
+        up = torch.randn(2, 2048, device="cuda", dtype=torch.float32).requires_grad_(True)
         out = swiglu(gate, up)
         torch.autograd.backward(out, torch.randn_like(out))
         del gate, up, out

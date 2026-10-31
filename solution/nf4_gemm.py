@@ -391,7 +391,9 @@ def _nf4_forward(self, x, original):
         x2 = x2.contiguous()
     x16 = x2.to(torch.float16)  # the base's x.to(compute_dtype)
     out = NF4Linear.apply(x16, packed_u8, qabs, s2, off, _get_lut(x.device), N, K)
-    return out.reshape(orig_shape).to(inp_dtype)  # the base's .to(inp_dtype)
+    # out is (m, N): restore the leading dims, but the last dim is N (out_features),
+    # not K (in_features) -- they differ for every projection except q_proj
+    return out.reshape(*orig_shape[:-1], N).to(inp_dtype)  # the base's .to(inp_dtype)
 
 
 def patch_nf4_linear():

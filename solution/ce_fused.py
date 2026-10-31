@@ -427,7 +427,7 @@ def precompile():
     v = 151936
     n = 2
     try:
-        logits = torch.randn(n, v, device="cuda", dtype=torch.float16) * 2
+        logits = (torch.randn(n, v, device="cuda", dtype=torch.float16) * 2).requires_grad_(True)
         targets = torch.tensor([17, -100], device="cuda", dtype=torch.int32)
         ce, ent, amax = FusedCE.apply(logits, targets)
         g = torch.where(targets >= 0, torch.full_like(ce, 0.5), torch.zeros_like(ce))

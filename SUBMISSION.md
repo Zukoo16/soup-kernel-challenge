@@ -1,17 +1,17 @@
-# Submission: <team name>
+# Submission: Zukoo16
 
 ## Links
 - Repository, final commit: https://github.com/Zukoo16/soup-kernel-challenge/commit/25592fe29ff06b93745e03752c7f511e378df570
 - Public Kaggle notebook, the saved version (`COMMIT` in it = the sha above; the same link must
   be in your README):
-  https://www.kaggle.com/code/<you>/<notebook>?scriptVersionId=<version>
-- Demo video (up to 3 minutes): <link>
-- Presentation: <link>
+  https://www.kaggle.com/code/rakhymbai/soup-kernel-challenge-t4-x2-run?scriptVersionId=<version>
+- Demo video (up to 3 minutes): https://github.com/Zukoo16/soup-kernel-challenge/blob/main/demo.mp4
+- Presentation: https://github.com/Zukoo16/soup-kernel-challenge/blob/main/presentation.html
 
 ## Team (up to 4 people)
 | Name | Role | GitHub | Kaggle | Contact (captain) |
 |---|---|---|---|---|
-| | | | | |
+| demey | ML / Triton kernels | Zukoo16 | rakhymbai | <phone> |
 
 ## Our kernels
 | Kernel (`@triton.jit` name) | File | What it replaces | Share of the training time (check 4) |
